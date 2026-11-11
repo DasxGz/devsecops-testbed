@@ -1,0 +1,64 @@
+# Banco de pruebas: API Gateway + 2 servicios de negocio, cada uno con su base de datos.
+# Solo el gateway expone un puerto hacia el exterior.
+x-healthcheck-node: &hc
+  interval: 5s
+  timeout: 3s
+  retries: 30
+
+services:
+  mongo-usuarios:
+    image: mongo:4.4.29
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: Usuarios2026!
+    networks: [interna]
+    healthcheck:
+      test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
+      <<: *hc
+
+  mongo-productos:
+    image: mongo:4.4.29
+    networks: [interna]
+    healthcheck:
+      test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
+      <<: *hc
+
+  servicio-usuarios:
+    build: ./servicio-usuarios
+    image: testbed/servicio-usuarios:ci
+    environment:
+      MONGO_URI: mongodb://admin:Usuarios2026!@mongo-usuarios:27017/usuarios?authSource=admin
+    depends_on:
+      mongo-usuarios: { condition: service_healthy }
+    networks: [interna]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      <<: *hc
+
+  servicio-productos:
+    build: ./servicio-productos
+    image: testbed/servicio-productos:ci
+    environment:
+      MONGO_URI: mongodb://mongo-productos:27017/productos
+    depends_on:
+      mongo-productos: { condition: service_healthy }
+    networks: [interna]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3002/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      <<: *hc
+
+  api-gateway:
+    build: ./api-gateway
+    image: testbed/api-gateway:ci
+    ports:
+      - "8080:8080"
+    depends_on:
+      servicio-usuarios: { condition: service_healthy }
+      servicio-productos: { condition: service_healthy }
+    networks: [interna]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      <<: *hc
+
+networks:
+  interna: {}

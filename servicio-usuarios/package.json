@@ -1,0 +1,14 @@
+{
+  "name": "servicio-usuarios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servicio de usuarios del banco de pruebas (vulnerable a propósito)",
+  "main": "src/server.js",
+  "scripts": { "start": "node src/server.js", "test": "node test/util.test.js" },
+  "dependencies": {
+    "express": "4.16.0",
+    "mongoose": "5.7.0",
+    "jsonwebtoken": "8.5.1",
+    "lodash": "4.17.4"
+  }
+}

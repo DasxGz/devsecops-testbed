@@ -1,0 +1,14 @@
+{
+  "name": "api-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API Gateway del banco de pruebas (vulnerable a propósito)",
+  "main": "src/server.js",
+  "scripts": { "start": "node src/server.js", "test": "node -e \"require('./src/openapi.json'); console.log('api-gateway: especificación OpenAPI válida')\"" },
+  "dependencies": {
+    "express": "4.16.0",
+    "cors": "2.8.4",
+    "http-proxy-middleware": "0.19.1",
+    "minimist": "1.2.0"
+  }
+}

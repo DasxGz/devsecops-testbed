@@ -1,0 +1,80 @@
+# Se ejecuta UNA SOLA VEZ, antes del piloto (sección 2.10).
+# 1. Descarga las reglas de Semgrep del registro y las guarda en reglas/semgrep/.
+# 2. Descarga la base de vulnerabilidades de Trivy y la publica como release
+#    "trivy-db-instantanea" para que todas las ejecuciones usen la misma.
+# 3. Registra las versiones y los digest de las imágenes en docs/versiones.json.
+name: "Preparar instantánea (una sola vez)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  SEMGREP_IMAGE: semgrep/semgrep:1.170.0
+  TRIVY_IMAGE: aquasec/trivy:0.69.3
+  ZAP_IMAGE: zaproxy/zap-stable:2.17.0
+
+jobs:
+  instantanea:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar reglas de Semgrep
+        run: |
+          mkdir -p reglas/semgrep
+          for r in javascript nodejs nodejsscan owasp-top-ten secrets; do
+            if curl -fsSL "https://semgrep.dev/c/p/$r" -o "reglas/semgrep/$r.yml"; then
+              echo "p/$r descargado: $(grep -cE '^\s*- id:' reglas/semgrep/$r.yml) reglas"
+            else
+              echo "::warning::El conjunto p/$r no está disponible en el registro; se omite."
+              rm -f "reglas/semgrep/$r.yml"
+            fi
+          done
+          ls reglas/semgrep/*.yml >/dev/null  # falla si no se descargó ningún conjunto
+
+      - name: Descargar imágenes y registrar versiones
+        run: |
+          for img in "$SEMGREP_IMAGE" "$TRIVY_IMAGE" "$ZAP_IMAGE" mongo:4.4.29 node:14.17.0-buster-slim; do docker pull -q "$img"; done
+          digest() { docker inspect --format '{{index .RepoDigests 0}}' "$1"; }
+          SG=$(docker run --rm "$SEMGREP_IMAGE" semgrep --version)
+          TV=$(docker run --rm "$TRIVY_IMAGE" --version | head -1)
+          cat > docs/versiones.json <<EOF
+          {
+            "fecha_instantanea": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "runner_image_version": "${ImageVersion:-}",
+            "semgrep": {"imagen": "$SEMGREP_IMAGE", "digest": "$(digest $SEMGREP_IMAGE)", "version": "$SG"},
+            "trivy": {"imagen": "$TRIVY_IMAGE", "digest": "$(digest $TRIVY_IMAGE)", "version": "$TV"},
+            "zap": {"imagen": "$ZAP_IMAGE", "digest": "$(digest $ZAP_IMAGE)"},
+            "mongo": "$(digest mongo:4.4.29)",
+            "node_base": "$(digest node:14.17.0-buster-slim)"
+          }
+          EOF
+          cat docs/versiones.json
+
+      - name: Descargar base de vulnerabilidades de Trivy
+        run: |
+          mkdir -p trivy-cache
+          docker run --rm -v "$PWD/trivy-cache:/root/.cache/trivy" "$TRIVY_IMAGE" image --download-db-only
+          sudo tar -czf trivy-db.tar.gz -C trivy-cache .
+          sudo cat trivy-cache/db/metadata.json | tee docs/trivy-db-metadata.json
+          ls -lh trivy-db.tar.gz
+
+      - name: Publicar la base como release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete trivy-db-instantanea --yes --cleanup-tag 2>/dev/null || true
+          gh release create trivy-db-instantanea trivy-db.tar.gz \
+            --title "Instantánea de la base de Trivy" \
+            --notes "Base de vulnerabilidades congelada para el experimento. Ver docs/trivy-db-metadata.json."
+
+      - name: Guardar reglas y versiones en el repositorio
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add reglas/semgrep docs/versiones.json docs/trivy-db-metadata.json
+          git commit -m "Instantánea de reglas de Semgrep y versiones de herramientas" || echo "Sin cambios"
+          git push

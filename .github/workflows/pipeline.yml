@@ -1,0 +1,136 @@
+# Pipeline único del experimento (sección 2.6). El parámetro "escenario" decide
+# qué etapas de seguridad se ejecutan; las etapas comunes son idénticas en A, B y C.
+#   A = CI/CD base (control)   B = SAST + SCA   C = SAST + SCA + DAST
+name: "Experimento DevSecOps"
+run-name: "Bloque ${{ inputs.bloque }} · orden ${{ inputs.orden }} · escenario ${{ inputs.escenario }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      escenario:
+        description: "Escenario experimental"
+        type: choice
+        options: [A, B, C]
+        required: true
+      bloque:
+        description: "Número de bloque (1-30, o P1-P3 para el piloto)"
+        required: true
+        default: "P1"
+      orden:
+        description: "Posición dentro del bloque (1-3)"
+        required: true
+        default: "1"
+
+permissions:
+  contents: read
+
+# Versiones fijas de las herramientas (sección 2.10). No usar "latest".
+# Trivy se fija en 0.69.3, última versión segura antes del incidente de cadena de
+# suministro de marzo de 2026 (GHSA-69fq-xp46-6x23 / CVE-2026-33634).
+env:
+  SEMGREP_IMAGE: semgrep/semgrep:1.170.0
+  TRIVY_IMAGE: aquasec/trivy:0.69.3
+  ZAP_IMAGE: zaproxy/zap-stable:2.17.0
+  ES_B_O_C: ${{ inputs.escenario == 'B' || inputs.escenario == 'C' }}
+  ES_C: ${{ inputs.escenario == 'C' }}
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      # ---------------- Etapas comunes y de seguridad ----------------
+      - name: "01 Obtención del código"
+        uses: actions/checkout@v4
+
+      - name: "02 Registrar metadatos"
+        run: |
+          mkdir -p reports && chmod 777 reports
+          cat > reports/metadatos.json <<EOF
+          {"escenario":"${{ inputs.escenario }}","bloque":"${{ inputs.bloque }}","orden":"${{ inputs.orden }}",
+           "run_id":"${{ github.run_id }}","commit":"${{ github.sha }}","ref":"${{ github.ref_name }}",
+           "runner_os":"${ImageOS:-}","runner_image_version":"${ImageVersion:-}","runner_name":"${{ runner.name }}",
+           "semgrep_image":"$SEMGREP_IMAGE","trivy_image":"$TRIVY_IMAGE","zap_image":"$ZAP_IMAGE"}
+          EOF
+          cat reports/metadatos.json
+
+      - name: "03 SAST - Semgrep"
+        if: env.ES_B_O_C == 'true'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep scan --config reglas/semgrep --metrics=off --disable-version-check \
+              --json --output reports/semgrep.json \
+              api-gateway servicio-usuarios servicio-productos
+          echo "Hallazgos de Semgrep: $(python3 -c "import json;print(len(json.load(open('reports/semgrep.json'))['results']))")"
+
+      - name: "04 Configurar Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: "05 Instalación de dependencias y pruebas unitarias"
+        run: |
+          for s in api-gateway servicio-usuarios servicio-productos; do
+            echo "::group::$s"
+            (cd "$s" && npm ci --no-audit --no-fund && npm test)
+            echo "::endgroup::"
+          done
+
+      - name: "06 Construcción de las imágenes Docker"
+        run: docker compose build --no-cache
+
+      - name: "07 SCA, imágenes y configuración - Trivy"
+        if: env.ES_B_O_C == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Base de vulnerabilidades congelada (instantánea creada por preparar-instantanea.yml)
+          gh release download trivy-db-instantanea -p trivy-db.tar.gz -D /tmp
+          mkdir -p trivy-cache && tar -xzf /tmp/trivy-db.tar.gz -C trivy-cache
+          T="docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $PWD:/src -w /src -v $PWD/trivy-cache:/root/.cache/trivy $TRIVY_IMAGE"
+          for s in api-gateway servicio-usuarios servicio-productos; do
+            $T image --skip-db-update --skip-java-db-update --scanners vuln \
+              --format json --output reports/trivy-imagen-$s.json testbed/$s:ci
+          done
+          $T config --skip-check-update --skip-dirs node_modules,trivy-cache,reglas,reports \
+            --format json --output reports/trivy-config.json .
+          $T fs --skip-db-update --scanners secret --skip-dirs node_modules,trivy-cache,reglas,reports,.git \
+            --format json --output reports/trivy-secretos.json .
+
+      - name: "08 Despliegue con Docker Compose"
+        run: docker compose up -d --wait --wait-timeout 240
+
+      - name: "09 Verificación de salud"
+        run: curl -fsS http://localhost:8080/health
+
+      - name: "10 DAST - OWASP ZAP (API scan)"
+        if: env.ES_C == 'true'
+        run: |
+          mkdir -p zap && chmod 777 zap
+          set +e
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-api-scan.py -t http://localhost:8080/openapi.json -f openapi -J zap.json -r zap.html -I
+          echo "Código de salida de ZAP: $?"
+          set -e
+          cp zap/zap.json zap/zap.html reports/
+
+      - name: "11 Correlación de hallazgos"
+        if: env.ES_C == 'true'
+        run: python3 scripts/correlacionar.py reports
+
+      - name: "12 Compuerta de seguridad"
+        if: env.ES_B_O_C == 'true'
+        run: python3 scripts/compuerta.py reports
+
+      # ---------------- Registro y limpieza (siempre) ----------------
+      - name: "13 Registro de métricas y publicación de artefactos"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultados-${{ inputs.escenario }}-b${{ inputs.bloque }}
+          path: reports/
+          retention-days: 90
+
+      - name: "14 Apagar el entorno"
+        if: always()
+        run: docker compose down -v

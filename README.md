@@ -4,7 +4,7 @@ Este es el laboratorio del trabajo de graduación *"Evaluación del impacto en l
 la eficacia en la detección temprana de vulnerabilidades mediante la integración de herramientas
 DevSecOps (SAST/DAST) en canalizaciones CI/CD para arquitecturas de microservicios"*.
 
-> ⚠️ **Vulnerable a propósito.** No lo despliegues en un servidor público.
+> **Vulnerable a propósito.** No lo despliegues en un servidor público.
 
 La implementación corresponde al capítulo 2 de la tesis (secciones 2.5 a 2.10).
 

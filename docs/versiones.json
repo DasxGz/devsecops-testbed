@@ -1,0 +1,9 @@
+{
+  "fecha_instantanea": "2026-11-11T13:03:29Z",
+  "runner_image_version": "20261101.360.1",
+  "semgrep": {"imagen": "semgrep/semgrep:1.170.0", "digest": "semgrep/semgrep@sha256:c98f8829eea377274ee4b10656458b078b88232469b2ff913f091c2317347c9d", "version": "1.170.0"},
+  "trivy": {"imagen": "aquasec/trivy:0.69.3", "digest": "aquasec/trivy@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c", "version": "Version: 0.69.3"},
+  "zap": {"imagen": "zaproxy/zap-stable:2.17.0", "digest": "zaproxy/zap-stable@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af"},
+  "mongo": "mongo@sha256:52c42cbab240b3c5b1748582cc13ef46d521ddacae002bbbda645cebed270ec0",
+  "node_base": "node@sha256:ccc25181fd9bc0170cfa2f873b11d005d41c06a1f4fa9e64aa89c579bcc6b03b"
+}
